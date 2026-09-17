@@ -1,0 +1,1134 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Aquiline Customer Integration API",
+    "version": "1.0.0",
+    "description": "HTTP API for creating marketplace profiles, syncing orders, and assigning Aquiline tracking to customer orders.\n\n**Authentication:** include  \n`Authorization: Bearer <integrationTokenId>.<integrationTokenSecret>`  \n(create the token in the app under **Dashboard → Integration API**).\n\n**Marketplaces:** Amazon, AliExpress, and Walmart (including Walmart native tracking numbers with `carrier: WALMART`).\n- **Amazon:** after you upsert orders, send fresh **order / shipment HTML** from a signed-in Amazon session about **1–2 times per day** so Aquiline can keep carrier and delivery context current.\n- **AliExpress / Walmart (3PL):** upsert the order with carrier tracking number (`FEDEX`, `UPS`, `USPS`, `ONTRAC`, …), then assign.\n- **Walmart native:** use `carrier: WALMART` and put the Walmart tracking number in `trackingUrl` (same pattern as USPS native numbers).\n"
+  },
+  "tags": [
+    {
+      "name": "1 · Account",
+      "description": "Who the token belongs to and current plan context."
+    },
+    {
+      "name": "2 · Create profile",
+      "description": "Register a marketplace source (Amazon or AliExpress) before syncing orders."
+    },
+    {
+      "name": "3 · List profiles",
+      "description": "Browse configured sources."
+    },
+    {
+      "name": "4 · Profile by id",
+      "description": "Read or update label, marketplace host, and ship-from / return address used for tracking."
+    },
+    {
+      "name": "5 · List orders",
+      "description": "Orders stored for a profile."
+    },
+    {
+      "name": "6 · Order by id",
+      "description": "Full snapshot for one marketplace order id."
+    },
+    {
+      "name": "7 · Upsert orders",
+      "description": "Idempotent ingest of order rows keyed by marketplace order id."
+    },
+    {
+      "name": "8 · Amazon order page refresh",
+      "description": "Upload HTML for an Amazon order or tracking page so Aquiline can refresh carrier signals."
+    },
+    {
+      "name": "9 · Aquiline tracking assignment",
+      "description": "Hand off carrier / tracking details so the order is followed inside Aquiline."
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://aquiline-tracking.com/app/api/integration",
+      "description": "Production"
+    }
+  ],
+  "paths": {
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "1 · Account"
+        ],
+        "summary": "Current account and usage",
+        "description": "Returns the authenticated user id, subscription flags, and plan limits for dashboards and guardrails.",
+        "operationId": "integrationMe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "uid": "usr_1234567890",
+                  "subscriptionActive": true,
+                  "billing": {
+                    "subscription": {
+                      "planCode": "starter",
+                      "cadence": "monthly",
+                      "status": "active",
+                      "currentPeriodEnd": "2026-05-29T00:00:00.000Z"
+                    },
+                    "usage": {
+                      "windowKey": "2026-05",
+                      "used": 12,
+                      "limit": 300,
+                      "remaining": 288
+                    },
+                    "plan": {
+                      "code": "starter",
+                      "label": "Starter",
+                      "trackLimitPerMonth": 300
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles": {
+      "post": {
+        "tags": [
+          "2 · Create profile"
+        ],
+        "summary": "Create a profile",
+        "description": "Creates a source profile. For Amazon, set `marketplaceHost` (e.g. `www.amazon.com`). Add `storeAddress` early—it is required before Aquiline can register tracking for some flows.",
+        "operationId": "integrationProfilesCreate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileBody"
+              },
+              "examples": {
+                "amazon": {
+                  "summary": "Amazon profile",
+                  "value": {
+                    "accountOrigin": "amazon",
+                    "profileId": "amazon-us-main",
+                    "label": "Amazon US",
+                    "marketplaceHost": "www.amazon.com",
+                    "amazonAccountEmail": "buyer@example.com",
+                    "storeAddress": {
+                      "address_line1": "100 Example St",
+                      "address_line2": "",
+                      "city": "Example City",
+                      "state": "CA",
+                      "zip_code": "90001",
+                      "country": "US",
+                      "first_name": "",
+                      "last_name": "",
+                      "phone_number": ""
+                    }
+                  }
+                },
+                "aliexpress": {
+                  "summary": "AliExpress profile",
+                  "value": {
+                    "accountOrigin": "aliexpress",
+                    "profileId": "aliexpress-main",
+                    "label": "AliExpress",
+                    "retailer": "aliexpress",
+                    "storeAddress": {
+                      "address_line1": "200 Example Ave",
+                      "address_line2": "",
+                      "city": "Example City",
+                      "state": "FL",
+                      "zip_code": "33100",
+                      "country": "US",
+                      "first_name": "",
+                      "last_name": "",
+                      "phone_number": ""
+                    }
+                  }
+                },
+                "walmart": {
+                  "summary": "Walmart profile",
+                  "value": {
+                    "accountOrigin": "walmart",
+                    "profileId": "walmart-main",
+                    "label": "Walmart US",
+                    "storeAddress": {
+                      "address_line1": "300 Retail Blvd",
+                      "address_line2": "",
+                      "city": "Bentonville",
+                      "state": "AR",
+                      "zip_code": "72712",
+                      "country": "US",
+                      "first_name": "",
+                      "last_name": "",
+                      "phone_number": ""
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "profileId": "amazon-us-main"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Paid plan required for this write"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "3 · List profiles"
+        ],
+        "summary": "List source profiles",
+        "description": "Ordered list of profiles with marketplace origin, label, and address hints.",
+        "operationId": "integrationProfilesList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "items": [
+                    {
+                      "profileId": "amazon-us-main",
+                      "label": "Amazon US",
+                      "accountOrigin": "amazon",
+                      "marketplaceHost": "www.amazon.com",
+                      "retailer": "amazon-us",
+                      "sourceKind": "amazon",
+                      "amazonAccountEmail": "buyer@example.com",
+                      "storeAddress": {
+                        "address_line1": "100 Example St",
+                        "address_line2": "",
+                        "city": "Example City",
+                        "state": "CA",
+                        "zip_code": "90001",
+                        "country": "US",
+                        "first_name": "",
+                        "last_name": "",
+                        "phone_number": ""
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}": {
+      "get": {
+        "tags": [
+          "4 · Profile by id"
+        ],
+        "summary": "Get profile by id",
+        "operationId": "integrationProfilesGet",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "profile": {
+                    "profileId": "amazon-us-main",
+                    "label": "Amazon US",
+                    "accountOrigin": "amazon",
+                    "marketplaceHost": "www.amazon.com",
+                    "retailer": "amazon-us",
+                    "sourceKind": "amazon",
+                    "amazonAccountEmail": "buyer@example.com",
+                    "storeAddress": {
+                      "address_line1": "100 Example St",
+                      "address_line2": "",
+                      "city": "Example City",
+                      "state": "CA",
+                      "zip_code": "90001",
+                      "country": "US",
+                      "first_name": "",
+                      "last_name": "",
+                      "phone_number": ""
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "4 · Profile by id"
+        ],
+        "summary": "Update profile (label, marketplaceHost, storeAddress)",
+        "description": "Partial update. Keep `storeAddress` accurate—Aquiline uses it when registering tracking with carriers.",
+        "operationId": "integrationProfilesPatch",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchProfileBody"
+              },
+              "example": {
+                "label": "Amazon US - Main account",
+                "storeAddress": {
+                  "address_line1": "100 Example St",
+                  "address_line2": "",
+                  "city": "Example City",
+                  "state": "CA",
+                  "zip_code": "90001",
+                  "country": "US",
+                  "first_name": "",
+                  "last_name": "",
+                  "phone_number": ""
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Paid plan required"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/orders": {
+      "get": {
+        "tags": [
+          "5 · List orders"
+        ],
+        "summary": "List orders for profile",
+        "operationId": "integrationOrdersList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "items": [
+                    {
+                      "orderId": "113-0000000-0000000",
+                      "profileId": "amazon-us-main",
+                      "marketplaceOrderId": "113-0000000-0000000",
+                      "accountOrigin": "amazon",
+                      "retailer": "amazon-us",
+                      "marketplaceHost": "www.amazon.com",
+                      "shipToName": "Morgan C.",
+                      "productTitle": "Example Amazon product",
+                      "productId": "B000000000",
+                      "productUrl": "https://www.amazon.com/dp/B000000000",
+                      "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-0000000-0000000",
+                      "sourceTracking": "Amazon",
+                      "status": "Shipping"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/orders/{orderId}": {
+      "get": {
+        "tags": [
+          "6 · Order by id"
+        ],
+        "summary": "Get one order",
+        "operationId": "integrationOrdersGet",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          },
+          {
+            "$ref": "#/components/parameters/orderId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "order": {
+                    "orderId": "113-0000000-0000000",
+                    "profileId": "amazon-us-main",
+                    "accountOrigin": "amazon",
+                    "retailer": "amazon-us",
+                    "marketplaceHost": "www.amazon.com",
+                    "shipToName": "Morgan C.",
+                    "productTitle": "Example Amazon product",
+                    "productId": "B000000000",
+                    "productUrl": "https://www.amazon.com/dp/B000000000",
+                    "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-0000000-0000000",
+                    "sourceTracking": "Amazon",
+                    "status": "Shipping",
+                    "aquilineNumber": "AQUA0000000000YQ"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/orders/upsert": {
+      "post": {
+        "tags": [
+          "7 · Upsert orders"
+        ],
+        "summary": "Upsert orders (idempotent by marketplace order id)",
+        "description": "Send the latest marketplace fields in bulk. Re-sending the same `marketplaceOrderId` updates the stored row without duplicating it.",
+        "operationId": "integrationOrdersUpsert",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertOrdersBody"
+              },
+              "example": {
+                "orders": [
+                  {
+                    "marketplaceOrderId": "113-0000000-0000000",
+                    "orderPlacedAt": "2026-05-12",
+                    "shipToName": "Morgan C.",
+                    "shippingAddress": {
+                      "first_name": "Morgan",
+                      "last_name": "C.",
+                      "address_line1": "101 Recipient Ave",
+                      "address_line2": "",
+                      "city": "Concord",
+                      "state": "NH",
+                      "zip_code": "03301-5202",
+                      "country": "US",
+                      "phone_number": "0000000000"
+                    },
+                    "productTitle": "Example Amazon product",
+                    "productId": "B000000000",
+                    "productUrl": "https://www.amazon.com/dp/B000000000",
+                    "orderUrl": "https://www.amazon.com/gp/your-account/order-details?orderID=113-0000000-0000000",
+                    "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-0000000-0000000",
+                    "sourceTracking": "Amazon",
+                    "status": "Shipping"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "count": 1,
+                  "suggestAmazonEmailFetch": false
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Paid plan required"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/orders/{orderId}/tracking-html": {
+      "post": {
+        "tags": [
+          "8 · Amazon order page refresh"
+        ],
+        "summary": "Upload Amazon order HTML (Amazon profiles only)",
+        "description": "Provide HTML from the live Amazon **tracking** page (progress tracker / ship-track) while the buyer session is still valid.\nDo **not** upload the order-details page.\n\nPlan on refreshing about **once or twice per day** per active Amazon profile so Aquiline keeps up with carrier milestones.\n\n**Important:** HTTP `success: true` means the HTML was **accepted** (stored and validated). It does **not** always mean updates were already **applied** to the Aquiline tracking number.\nCheck `outcome`: `accepted` | `applied`. While parsing is in progress, `trackingUpdateStatus` is `processing` (Firestore `trackingHealth` on the order). Hard failures return `problemCode`. Never treat success alone as “applied”.\n",
+        "operationId": "integrationOrdersTrackingHtml",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          },
+          {
+            "$ref": "#/components/parameters/orderId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackingHtmlBody"
+              },
+              "example": {
+                "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-0000000-0000000",
+                "html": "<html>Authenticated Amazon tracking page HTML...</html>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "HTML accepted (and optionally applied)",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "outcome": "accepted",
+                  "trackingUpdateStatus": "processing",
+                  "message": "Processing updates…",
+                  "result": {
+                    "status": "success"
+                  },
+                  "trackingRefresh": {
+                    "enqueued": true,
+                    "parsed": false
+                  },
+                  "suggestAmazonEmailFetch": false
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Paid plan required"
+          }
+        }
+      }
+    },
+    "/v1/webhooks": {
+      "get": {
+        "tags": [
+          "10 · Webhooks"
+        ],
+        "summary": "List Integration webhooks",
+        "operationId": "integrationWebhooksList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "items": [
+                    {
+                      "id": "wh_abc",
+                      "url": "https://example.com/hooks/aquiline",
+                      "events": [
+                        "tracking.html.accepted",
+                        "tracking.problem.opened"
+                      ],
+                      "active": true,
+                      "secretHint": "abcd…wxyz"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "10 · Webhooks"
+        ],
+        "summary": "Create Integration webhook",
+        "description": "Subscribe to tracking HTML / problem events for your account.\nSignature header: `X-Webhook-Signature: sha256=<hex hmac of raw body with your secret>`.\n\nEvent types: `tracking.html.accepted`, `tracking.html.applied`, `tracking.html.rejected`,\n`tracking.problem.opened`, `tracking.problem.cleared`.\n\nPayload shape: `{ \"event\": \"<name>\", \"createdAt\": \"<iso>\", \"data\": { ... } }`.\n`data` always includes `profileId` and `orderId` (marketplace order id). AQUA number is not included.\n`problemCode` / `message` appear on rejected / problem events (public codes only).\n\nExamples:\n- `tracking.html.applied` → `data: { profileId, orderId, outcome: \"applied\" }`\n- `tracking.html.accepted` → `data: { profileId, orderId, outcome: \"accepted\", problemCode? }`\n- `tracking.html.rejected` → `data: { profileId, orderId, outcome: \"rejected\", problemCode, message }`\n  (HTTP error response is still returned; webhook is delivered best-effort)\n- `tracking.problem.opened` → `data: { profileId, orderId, problemCode, message }`\n- `tracking.problem.cleared` → `data: { profileId, orderId, previousProblemCode? }`\n",
+        "operationId": "integrationWebhooksCreate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "HTTPS endpoint"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "secret": {
+                    "type": "string",
+                    "description": "Optional; generated if omitted"
+                  }
+                }
+              },
+              "example": {
+                "url": "https://example.com/hooks/aquiline",
+                "events": [
+                  "tracking.problem.opened",
+                  "tracking.html.applied"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created (includes secret once)"
+          }
+        }
+      }
+    },
+    "/v1/webhooks/{webhookId}": {
+      "delete": {
+        "tags": [
+          "10 · Webhooks"
+        ],
+        "summary": "Delete Integration webhook",
+        "operationId": "integrationWebhooksDelete",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/orders/{orderId}/assign": {
+      "post": {
+        "tags": [
+          "9 · Aquiline tracking assignment"
+        ],
+        "summary": "Register Aquiline tracking for an order",
+        "description": "Submit the carrier-facing tracking signal Aquiline should follow (Amazon tracking page URL; AliExpress or Walmart with `carrier` and tracking number — no `retailer` for Walmart).\n\nEnsure **storeAddress** is populated on the profile first—Aquiline uses it when talking to carriers. After this call succeeds, the order is monitored inside Aquiline the same way as orders created from the web app.\n",
+        "operationId": "integrationOrdersAssign",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/profileId"
+          },
+          {
+            "$ref": "#/components/parameters/orderId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignOrderBody"
+              },
+              "examples": {
+                "amazon": {
+                  "summary": "Amazon tracking page",
+                  "value": {
+                    "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-0000000-0000000",
+                    "retailer": "amazon-us",
+                    "marketplaceHost": "www.amazon.com",
+                    "sourceTracking": "Amazon",
+                    "shippingAddress": {
+                      "first_name": "Morgan",
+                      "last_name": "C.",
+                      "address_line1": "101 Recipient Ave",
+                      "address_line2": "",
+                      "city": "Concord",
+                      "state": "NH",
+                      "zip_code": "03301-5202",
+                      "country": "US",
+                      "phone_number": "0000000000"
+                    }
+                  }
+                },
+                "aliexpressCainiao": {
+                  "summary": "AliExpress Cainiao",
+                  "value": {
+                    "trackingUrl": "JJD0000000000000000",
+                    "carrier": "CAINIAO",
+                    "sourceTracking": "JJD0000000000000000",
+                    "shippingAddress": {
+                      "first_name": "Scott",
+                      "last_name": "C.",
+                      "address_line1": "200 Buyer Road",
+                      "address_line2": "25 example",
+                      "city": "Bedworth",
+                      "state": "",
+                      "zip_code": "CV12 9BP",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                },
+                "aliexpressGofo": {
+                  "summary": "AliExpress GOFO (GFUS…)",
+                  "value": {
+                    "trackingUrl": "GFUS03100000432908",
+                    "carrier": "GOFO",
+                    "sourceTracking": "GFUS03100000432908",
+                    "shippingAddress": {
+                      "first_name": "Scott",
+                      "last_name": "C.",
+                      "address_line1": "200 Buyer Road",
+                      "address_line2": "",
+                      "city": "Terrytown",
+                      "state": "LA",
+                      "zip_code": "70056",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                },
+                "aliexpressUniUni": {
+                  "summary": "AliExpress UniUni (U999…)",
+                  "value": {
+                    "trackingUrl": "U999872565583137",
+                    "carrier": "UNIUNI",
+                    "sourceTracking": "U999872565583137",
+                    "shippingAddress": {
+                      "first_name": "Scott",
+                      "last_name": "C.",
+                      "address_line1": "200 Buyer Road",
+                      "address_line2": "25 example",
+                      "city": "Bedworth",
+                      "state": "",
+                      "zip_code": "CV12 9BP",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                },
+                "walmart": {
+                  "summary": "Walmart FedEx/UPS/USPS (non-Amazon)",
+                  "value": {
+                    "trackingUrl": "794612345678",
+                    "carrier": "FEDEX",
+                    "sourceTracking": "794612345678",
+                    "shippingAddress": {
+                      "first_name": "Alex",
+                      "last_name": "R.",
+                      "address_line1": "10 Recipient Lane",
+                      "address_line2": "",
+                      "city": "Dallas",
+                      "state": "TX",
+                      "zip_code": "75201",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                },
+                "walmartOntrac": {
+                  "summary": "Walmart OnTrac tracking",
+                  "value": {
+                    "trackingUrl": "1LSCXLNA048876257",
+                    "carrier": "ONTRAC",
+                    "sourceTracking": "1LSCXLNA048876257",
+                    "shippingAddress": {
+                      "first_name": "Alex",
+                      "last_name": "R.",
+                      "address_line1": "10 Recipient Lane",
+                      "address_line2": "",
+                      "city": "Grants Pass",
+                      "state": "OR",
+                      "zip_code": "97526",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                },
+                "walmartNative": {
+                  "summary": "Walmart native tracking number (WALMART carrier)",
+                  "value": {
+                    "trackingUrl": "55546666127176957582",
+                    "carrier": "WALMART",
+                    "sourceTracking": "55546666127176957582",
+                    "shippingAddress": {
+                      "first_name": "Alex",
+                      "last_name": "R.",
+                      "address_line1": "10 Recipient Lane",
+                      "address_line2": "",
+                      "city": "Dallas",
+                      "state": "TX",
+                      "zip_code": "75201",
+                      "country": "US",
+                      "phone_number": "000"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "aquiline": "AQUA0000000000YQ",
+                  "chargedCents": 0,
+                  "planLimit": 300,
+                  "planUsed": 13,
+                  "planRemaining": 287
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Paid plan required"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "integration_api_token"
+      }
+    },
+    "parameters": {
+      "profileId": {
+        "name": "profileId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "orderId": {
+        "name": "orderId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "CreateProfileBody": {
+        "type": "object",
+        "required": [
+          "accountOrigin"
+        ],
+        "properties": {
+          "accountOrigin": {
+            "type": "string",
+            "enum": [
+              "amazon",
+              "aliexpress",
+              "walmart"
+            ]
+          },
+          "profileId": {
+            "type": "string",
+            "description": "Optional client-chosen id; server generates one if omitted."
+          },
+          "label": {
+            "type": "string"
+          },
+          "marketplaceHost": {
+            "type": "string",
+            "description": "Amazon hostname when accountOrigin is amazon (e.g. www.amazon.com)."
+          },
+          "retailer": {
+            "type": "string"
+          },
+          "storeAddress": {
+            "$ref": "#/components/schemas/StoreAddress"
+          },
+          "amazonAccountEmail": {
+            "type": "string",
+            "description": "Optional; helps the Amazon HTML refresh pipeline when accountOrigin is amazon."
+          }
+        }
+      },
+      "PatchProfileBody": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "marketplaceHost": {
+            "type": "string"
+          },
+          "storeAddress": {
+            "$ref": "#/components/schemas/StoreAddress"
+          }
+        }
+      },
+      "StoreAddress": {
+        "type": "object",
+        "properties": {
+          "address_line1": {
+            "type": "string"
+          },
+          "address_line2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "zip_code": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "phone_number": {
+            "type": "string"
+          }
+        }
+      },
+      "UpsertOrdersBody": {
+        "type": "object",
+        "required": [
+          "orders"
+        ],
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceOrder"
+            }
+          }
+        }
+      },
+      "MarketplaceOrder": {
+        "type": "object",
+        "required": [
+          "marketplaceOrderId"
+        ],
+        "properties": {
+          "marketplaceOrderId": {
+            "type": "string",
+            "description": "Primary order id in the source marketplace (same as document id)."
+          },
+          "orderId": {
+            "type": "string",
+            "description": "Alias of marketplaceOrderId for compatibility."
+          },
+          "orderPlacedAt": {
+            "type": "string"
+          },
+          "shipToName": {
+            "type": "string"
+          },
+          "shippingAddress": {
+            "$ref": "#/components/schemas/StoreAddress"
+          },
+          "productTitle": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "productUrl": {
+            "type": "string"
+          },
+          "productImageUrl": {
+            "type": "string"
+          },
+          "orderUrl": {
+            "type": "string"
+          },
+          "trackingUrl": {
+            "type": "string"
+          },
+          "sourceTracking": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AssignOrderBody": {
+        "type": "object",
+        "required": [
+          "trackingUrl"
+        ],
+        "properties": {
+          "trackingUrl": {
+            "type": "string",
+            "description": "Amazon tracking page URL, or carrier tracking number for AliExpress / Walmart."
+          },
+          "carrier": {
+            "type": "string",
+            "description": "Required for non-Amazon assign — AliExpress (CAINIAO, GOFO for GFUS…, UNIUNI for U999…) or Walmart/Amazon 3PL (FEDEX, UPS, USPS, WALMART for Walmart native numbers, ONTRAC, GOFO, UNIUNI). Do not send retailer for Walmart/AliExpress."
+          },
+          "retailer": {
+            "type": "string",
+            "description": "Amazon only (e.g. amazon-us). Omit for Walmart; AliExpress profiles ignore retailer on assign."
+          },
+          "marketplaceHost": {
+            "type": "string"
+          },
+          "sourceTracking": {
+            "type": "string"
+          },
+          "amazonCustomerId": {
+            "type": "string"
+          },
+          "shippingAddress": {
+            "$ref": "#/components/schemas/StoreAddress"
+          }
+        }
+      },
+      "TrackingHtmlBody": {
+        "type": "object",
+        "required": [
+          "trackingUrl",
+          "html"
+        ],
+        "properties": {
+          "trackingUrl": {
+            "type": "string"
+          },
+          "html": {
+            "type": "string",
+            "description": "Full HTML of the Amazon tracking page from an authenticated session (not order-details)."
+          },
+          "amazonCustomerId": {
+            "type": "string"
+          }
+        }
+      },
+      "ProblemCode": {
+        "type": "string",
+        "description": "Public problem codes for tracking HTML / updates (never internal parser names):\nwrong_page_type, amazon_session_expired, tracking_url_mismatch, needs_tracking_upload,\nupdate_not_applied, assign_validation, shipment_exception, tracking_update_unavailable.\n"
+      }
+    }
+  }
+}
