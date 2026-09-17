@@ -1,0 +1,120 @@
+{
+  "info": {
+    "name": "Aquiline Order Sync Service",
+    "_postman_id": "9f2b6b3a-7d3c-4b8e-9a2b-aquiline-sync-svc",
+    "description": "Local/staging test collection for the aquiline-sync-service API. Set the {{baseUrl}} variable to wherever the service is running (default http://localhost:3000).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
+    { "key": "profileId", "value": "amazon-us-main", "type": "string" },
+    { "key": "orderId", "value": "113-5870630-5330667", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/healthz",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "healthz"]
+        }
+      }
+    },
+    {
+      "name": "Sync Order (create profile + upsert)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/orders/sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "orders", "sync"]
+        },
+        "description": "Main flow: checks if the profile exists in Aquiline, creates it if missing, then upserts the order(s)."
+      }
+    },
+    {
+      "name": "Sync Order - Validation Error (missing orders)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/orders/sync",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "orders", "sync"]
+        },
+        "description": "Expect a 400 with stage: validation — used to confirm Joi validation runs before Aquiline is ever called."
+      }
+    },
+    {
+      "name": "Upload Tracking HTML (Amazon)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste authenticated Amazon tracking page HTML here...</html>\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/tracking/upload-html",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "tracking", "upload-html"]
+        },
+        "description": "Task 2 (on demand). success:true only means the HTML was accepted, not that it was applied — check outcome/trackingUpdateStatus in the response."
+      }
+    },
+    {
+      "name": "Assign Tracking (register with Aquiline)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"retailer\": \"amazon-us\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"sourceTracking\": \"Amazon\",\n  \"shippingAddress\": {\n    \"first_name\": \"Greg\",\n    \"last_name\": \"Carmouche\",\n    \"address_line1\": \"101 Recipient Ave\",\n    \"address_line2\": \"\",\n    \"city\": \"Concord\",\n    \"state\": \"NH\",\n    \"zip_code\": \"03301-5202\",\n    \"country\": \"US\",\n    \"phone_number\": \"0000000000\"\n  }\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/tracking/assign",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "tracking", "assign"]
+        },
+        "description": "For AliExpress/Walmart, replace with a carrier tracking number and add \"carrier\": \"FEDEX\"|\"UPS\"|\"USPS\"|\"ONTRAC\"|\"WALMART\"|\"CAINIAO\"|\"GOFO\"|\"UNIUNI\", and omit retailer."
+      }
+    },
+    {
+      "name": "Get Tracking (lookup Aquiline number)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/tracking/{{profileId}}/{{orderId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "tracking", "{{profileId}}", "{{orderId}}"]
+        },
+        "description": "Task 3 (on demand). Returns aquilineNumber/status/trackingUrl for the order."
+      }
+    }
+  ]
+}
