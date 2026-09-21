@@ -1,120 +1,1186 @@
 {
   "info": {
+    "_postman_id": "6f1c2d8e-3b4a-4c5d-9e6f-a1b2c3d4e5f6",
     "name": "Aquiline Order Sync Service",
-    "_postman_id": "9f2b6b3a-7d3c-4b8e-9a2b-aquiline-sync-svc",
-    "description": "Local/staging test collection for the aquiline-sync-service API. Set the {{baseUrl}} variable to wherever the service is running (default http://localhost:3000).",
+    "description": "# Aquiline Order Sync Service\n\nA small, **stateless** Node.js/Express service that syncs Amazon orders into the **Aquiline Customer Integration API** and registers them for Aquiline tracking.\n\n- **No database, no cache.** Every request calls Aquiline directly and returns the result.\n- **No auth on this service.** The Aquiline integration token (`AQUILINE_TOKEN_ID` / `AQUILINE_TOKEN_SECRET`) is in the service's `.env` and is attached to Aquiline calls by the service. You never send it from Postman.\n- **No retries.** Failures come back straight away. The caller decides whether to retry.\n\n---\n\n## Quick start\n\n1. Import **aquiline-tracker.json** (this collection). All variables are on the collection.\n2. If the service isn't on `http://localhost:3000`, change `baseUrl` under **Collection → Variables**.\n3. Start the service: `cp .env.example .env`, fill in the token, then run `npm install && npm run dev`.\n4. Send **Health → Health Check**. You should get `{ \"success\": true, \"status\": \"ok\" }`.\n5. For a normal order, use **Orders → Sync Full**. It does everything in one call.\n\nEvery request has **saved examples** (the *Examples* dropdown on the right of the request) showing success, skip and failure responses. You can look at them without calling anything.\n\n---\n\n## The order lifecycle\n\n```\n ensure profile ──► upsert order ──► assign tracking ──► upload tracking HTML\n (create if missing)  (idempotent)    (gets AQUA number)   (refresh 1-2x/day)\n```\n\n| Endpoint | Covers |\n|---|---|\n| `POST /api/orders/sync-full` | **All four steps** for one order, with checks before each step and a per-step report. **Use this by default.** |\n| `POST /api/orders/sync` | Ensure profile + upsert only (supports **many** orders in one call). |\n| `POST /api/tracking/assign` | Assign tracking only. |\n| `POST /api/tracking/upload-html` | Upload tracking HTML only (the daily refresh). |\n| `GET /api/tracking/:profileId/:orderId` | Read-only lookup of the AQUA number and status. |\n| `GET /api/health` | Liveness check. |\n\n---\n\n## Response conventions\n\n**Success:** `{ \"success\": true, ... }` with HTTP `200`.\n\n**Error** (every endpoint except `sync-full`):\n```json\n{ \"success\": false, \"stage\": \"<where it failed>\", \"error\": \"<message>\", \"details\": { } }\n```\n`details` holds validation messages, or the raw Aquiline error body (for example `problemCode`).\n\n**`sync-full`** always returns a **per-step report** (see that request's docs), both when it succeeds and when a step fails.\n\n### Error stages and HTTP codes\n\n| `stage` | Meaning | HTTP |\n|---|---|---|\n| `validation` | Bad request body. Aquiline was **not** called. | 400 |\n| `not_found` | Unknown route. | 404 |\n| `get_tracking` | Order not found in Aquiline (lookup endpoint only). | 404 |\n| `check_profile`, `create_profile`, `upsert_order`, `assign_tracking`, `upload_html`, `get_tracking` | An Aquiline call failed. | **402** paid plan required · **502** Aquiline returned an error · **504** Aquiline didn't respond (timeout) · **500** unexpected |\n\n---\n\n## Cost / plan usage\n\n- **Assign tracking counts against your Aquiline plan** (`planUsed` / `planRemaining`, and possibly `chargedCents`).\n- `sync-full` first checks whether the order already has an AQUA number and **skips assign** if it does, so retries are safe.\n- `POST /api/tracking/assign` does **not** check first. Calling it twice for the same order calls Aquiline's assign twice. Aquiline's docs don't say whether that is charged again, so avoid it.\n- Upsert is idempotent (keyed by `marketplaceOrderId`) and safe to repeat.\n\n---\n\n## Variables\n\nEdit them under **Collection → Variables**:\n\n| Variable | Default |\n|---|---|\n| `baseUrl` | `http://localhost:3000` |\n| `profileId` | `amazon-us-main` |\n| `orderId` | `113-5870630-5330667` |\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
-    { "key": "profileId", "value": "amazon-us-main", "type": "string" },
-    { "key": "orderId", "value": "113-5870630-5330667", "type": "string" }
-  ],
   "item": [
     {
-      "name": "Health Check",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/healthz",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "healthz"]
+      "name": "Health",
+      "description": "Liveness check. Aquiline is not called, so this only confirms the service process is up.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "health"
+              ]
+            },
+            "description": "Returns `200` when the service is running. It does **not** call Aquiline, so it says nothing about Aquiline reachability or the token.\n\nUse it for load-balancer and container health checks."
+          },
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/health",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "health"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"status\": \"ok\"\n}"
+            }
+          ]
         }
-      }
+      ]
     },
     {
-      "name": "Sync Order (create profile + upsert)",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
-          "options": { "raw": { "language": "json" } }
+      "name": "Orders",
+      "description": "Sync orders into Aquiline. **Sync Full** is the one-call lifecycle for a single order. **Sync Order** does profile + upsert for one or many orders without assigning tracking.",
+      "item": [
+        {
+          "name": "Sync Full - sync + assign + upload HTML",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/sync-full",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "sync-full"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**The main endpoint.** Handles one order end to end: **ensure profile → upsert order → assign tracking → upload tracking HTML**. It checks conditions before each step and returns a report for every step.\n\n| # | Step | Runs when | Skipped with `reason` |\n|---|---|---|---|\n| 1 | `ensure_profile` | always (creates the profile if missing) | — |\n| 2 | `upsert_order` | always | — |\n| 3 | `assign_tracking` | a tracking URL exists **and** the order has no AQUA number yet | `no_tracking` · `already_assigned` (no charge) |\n| 4 | `upload_html` | `html` sent **and** the order has an AQUA number | `no_html` · `not_assigned` |\n\n### Aquiline calls (in order)\n`GET /v1/profiles/{id}` → (`POST /v1/profiles` if missing) → `POST .../orders/upsert` → `GET .../orders/{orderId}` (already assigned?) → `POST .../orders/{orderId}/assign` → `POST .../orders/{orderId}/tracking-html`\n\n### Body\n\n| Field | Required | Notes |\n|---|---|---|\n| `profileId` | ✅ | Your id for the Amazon account, e.g. `amazon-us-main`. Reused if it already exists. |\n| `accountOrigin` | ✅ | Always `\"amazon\"`. |\n| `label` | | Display name. |\n| `marketplaceHost` | | e.g. `www.amazon.com`. |\n| `retailer` | | e.g. `amazon-us`. |\n| `amazonAccountEmail` | | Must be a valid email. Helps Aquiline's HTML refresh. |\n| `storeAddress` | | Ship-from / return address. **Needed before Aquiline can assign tracking**, so set it on the first call. |\n| `order` | ✅ | **One** order object (same fields as a Sync Order `orders[]` item). `order.trackingUrl` is used for assign unless `tracking.trackingUrl` is set. |\n| `tracking` | | Optional overrides for the assign call: `trackingUrl`, `retailer`, `marketplaceHost`, `sourceTracking`, `amazonCustomerId`, `shippingAddress`. |\n| `html` | | HTML of the live Amazon **tracking** page (ship-track / progress tracker) from a signed-in session. **Not** the order-details page. Max request size 5 MB. |\n| `amazonCustomerId` | | Optional, passed to assign and HTML upload. |\n\n### How the assign call is built\nEach field comes from `tracking` if set, otherwise from the order or top level:\n- `trackingUrl`: `tracking.trackingUrl`, otherwise `order.trackingUrl`.\n- `sourceTracking`: `tracking.sourceTracking`, otherwise `order.sourceTracking`.\n- `shippingAddress`: `tracking.shippingAddress`, otherwise `order.shippingAddress`.\n- `retailer` / `marketplaceHost`: `tracking.*`, otherwise the top-level fields.\n\n### Response: per-step report\n\n```json\n{\n  \"success\": true,\n  \"profileId\": \"...\",\n  \"orderId\": \"...\",\n  \"failedStep\": null,\n  \"steps\": {\n    \"ensure_profile\":  { \"status\": \"done\", \"created\": false },\n    \"upsert_order\":    { \"status\": \"done\", \"suggestAmazonEmailFetch\": false },\n    \"assign_tracking\": { \"status\": \"done\", \"aquilineNumber\": \"AQUA...\", \"chargedCents\": 0, \"planRemaining\": 287 },\n    \"upload_html\":     { \"status\": \"done\", \"outcome\": \"accepted\", \"trackingUpdateStatus\": \"processing\", \"message\": \"...\" }\n  }\n}\n```\n\nEach step's `status` is one of:\n- `done`: ran and succeeded.\n- `skipped`: its condition wasn't met (see `reason`). This is **not** an error.\n- `failed`: Aquiline returned an error. The step has `stage`, `error` and `details` (for example `problemCode`).\n- `not_run`: an earlier step failed, so this one never ran.\n\n**Stops at the first failure.** `success` is `false` and `failedStep` names the failed step. The HTTP code is that step's error code (**402** plan · **502** Aquiline error · **504** timeout · **500** unexpected). Steps before it may already have succeeded, and the report shows which ones.\n\n**HTTP 400** means the body failed validation, and nothing was sent to Aquiline. That response has the normal error shape `{ success:false, stage:\"validation\", ... }`.\n\n**Safe to retry.** Profile and upsert are idempotent, and assign is skipped once the order has an AQUA number.\n\n### Note on HTML\n`outcome: \"accepted\"` means Aquiline **stored** the HTML and is still processing it (`trackingUpdateStatus: \"processing\"`). It does **not** mean the update was applied. `\"applied\"` means it was applied. Re-send new HTML about **1-2 times per day** using **Tracking → Upload Tracking HTML**."
+          },
+          "response": [
+            {
+              "name": "200 - All steps done",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": null,\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": false\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"done\",\n      \"aquilineNumber\": \"AQUA0000000000YQ\",\n      \"chargedCents\": 0,\n      \"planRemaining\": 287\n    },\n    \"upload_html\": {\n      \"status\": \"done\",\n      \"outcome\": \"accepted\",\n      \"trackingUpdateStatus\": \"processing\",\n      \"message\": \"Processing updates…\"\n    }\n  }\n}"
+            },
+            {
+              "name": "200 - Retry: already assigned (no charge), HTML uploaded",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": null,\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": false\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"skipped\",\n      \"reason\": \"already_assigned\",\n      \"aquilineNumber\": \"AQUA0000000000YQ\"\n    },\n    \"upload_html\": {\n      \"status\": \"done\",\n      \"outcome\": \"applied\",\n      \"trackingUpdateStatus\": \"ok\",\n      \"message\": \"Tracking updated\"\n    }\n  }\n}"
+            },
+            {
+              "name": "200 - New profile created, no HTML sent",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": null,\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": true\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"done\",\n      \"aquilineNumber\": \"AQUA0000000000YQ\",\n      \"chargedCents\": 0,\n      \"planRemaining\": 287\n    },\n    \"upload_html\": {\n      \"status\": \"skipped\",\n      \"reason\": \"no_html\"\n    }\n  }\n}"
+            },
+            {
+              "name": "200 - No tracking yet: synced only",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": null,\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": false\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"skipped\",\n      \"reason\": \"no_tracking\"\n    },\n    \"upload_html\": {\n      \"status\": \"skipped\",\n      \"reason\": \"not_assigned\"\n    }\n  }\n}"
+            },
+            {
+              "name": "402 - Assign failed: paid plan required",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Payment Required",
+              "code": 402,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": \"assign_tracking\",\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": false\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"failed\",\n      \"stage\": \"assign_tracking\",\n      \"error\": \"Paid plan required\",\n      \"details\": {\n        \"success\": false,\n        \"error\": \"Paid plan required\"\n      }\n    },\n    \"upload_html\": {\n      \"status\": \"not_run\"\n    }\n  }\n}"
+            },
+            {
+              "name": "502 - HTML upload failed: Amazon session expired",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Gateway",
+              "code": 502,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": \"upload_html\",\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"done\",\n      \"created\": false\n    },\n    \"upsert_order\": {\n      \"status\": \"done\",\n      \"suggestAmazonEmailFetch\": false\n    },\n    \"assign_tracking\": {\n      \"status\": \"skipped\",\n      \"reason\": \"already_assigned\",\n      \"aquilineNumber\": \"AQUA0000000000YQ\"\n    },\n    \"upload_html\": {\n      \"status\": \"failed\",\n      \"stage\": \"upload_html\",\n      \"error\": \"Amazon session expired\",\n      \"details\": {\n        \"success\": false,\n        \"problemCode\": \"amazon_session_expired\",\n        \"message\": \"Amazon session expired\"\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "504 - Aquiline did not respond (profile check)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"order\": {\n    \"marketplaceOrderId\": \"{{orderId}}\",\n    \"orderPlacedAt\": \"2026-05-16\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"shippingAddress\": {\n      \"first_name\": \"Greg\",\n      \"last_name\": \"Carmouche\",\n      \"address_line1\": \"101 Recipient Ave\",\n      \"address_line2\": \"\",\n      \"city\": \"Concord\",\n      \"state\": \"NH\",\n      \"zip_code\": \"03301-5202\",\n      \"country\": \"US\",\n      \"phone_number\": \"0000000000\"\n    },\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Gateway Timeout",
+              "code": 504,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"profileId\": \"amazon-us-main\",\n  \"orderId\": \"113-5870630-5330667\",\n  \"failedStep\": \"ensure_profile\",\n  \"steps\": {\n    \"ensure_profile\": {\n      \"status\": \"failed\",\n      \"stage\": \"check_profile\",\n      \"error\": \"No response from Aquiline API\"\n    },\n    \"upsert_order\": {\n      \"status\": \"not_run\"\n    },\n    \"assign_tracking\": {\n      \"status\": \"not_run\"\n    },\n    \"upload_html\": {\n      \"status\": \"not_run\"\n    }\n  }\n}"
+            }
+          ]
         },
-        "url": {
-          "raw": "{{baseUrl}}/api/orders/sync",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "orders", "sync"]
+        {
+          "name": "Sync Order (profile + upsert, many orders)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "sync"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"amazonAccountEmail\": \"buyer@example.com\",\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Makes sure the **profile** exists in Aquiline, then **upserts** the order(s). It does **not** assign tracking or upload HTML (use **Sync Full** for that).\n\n### Aquiline calls\n1. `GET /v1/profiles/{profileId}`: does the profile exist?\n2. `POST /v1/profiles`: only if it doesn't. It's created with **your** `profileId`.\n3. `POST /v1/profiles/{profileId}/orders/upsert`: idempotent by `marketplaceOrderId`.\n\n### Body\n\n| Field | Required | Notes |\n|---|---|---|\n| `profileId` | ✅ | Your id for the Amazon account, e.g. `amazon-us-main`. Reused if it already exists. |\n| `accountOrigin` | ✅ | Always `\"amazon\"`. |\n| `label` | | Display name. |\n| `marketplaceHost` | | e.g. `www.amazon.com`. |\n| `retailer` | | e.g. `amazon-us`. |\n| `amazonAccountEmail` | | Must be a valid email. Helps Aquiline's HTML refresh. |\n| `storeAddress` | | Ship-from / return address. **Needed before Aquiline can assign tracking**, so set it on the first call. |\n| `orders` | ✅ | Array, at least 1 item. See the order fields below. |\n\n**Order fields:** `marketplaceOrderId` (✅), `orderId`, `orderPlacedAt`, `shipToName`, `shippingAddress`, `productTitle`, `productId`, `productUrl`, `productImageUrl`, `orderUrl`, `trackingUrl`, `sourceTracking`, `status`. Unknown order fields are rejected. Unknown top-level fields are silently dropped.\n\nProfile fields are **only used when the profile is created**. They don't update an existing profile.\n\n### Response\n`profileCreated` shows whether step 2 ran. `ordersUpserted` is the count Aquiline reports."
+          },
+          "response": [
+            {
+              "name": "200 - Profile existed, order upserted",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"amazonAccountEmail\": \"buyer@example.com\",\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"profileCreated\": false,\n  \"ordersUpserted\": 1,\n  \"suggestAmazonEmailFetch\": false\n}"
+            },
+            {
+              "name": "200 - Profile created, order upserted",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"amazonAccountEmail\": \"buyer@example.com\",\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"profileId\": \"amazon-us-main\",\n  \"profileCreated\": true,\n  \"ordersUpserted\": 1,\n  \"suggestAmazonEmailFetch\": false\n}"
+            },
+            {
+              "name": "400 - Validation: orders missing",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"validation\",\n  \"error\": \"Validation failed\",\n  \"details\": [\n    \"\\\"orders\\\" is required\"\n  ]\n}"
+            },
+            {
+              "name": "402 - Upsert failed: paid plan required",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"amazonAccountEmail\": \"buyer@example.com\",\n  \"orders\": [\n    {\n      \"marketplaceOrderId\": \"{{orderId}}\",\n      \"orderPlacedAt\": \"2026-05-16\",\n      \"shipToName\": \"Greg Carmouche\",\n      \"shippingAddress\": {\n        \"first_name\": \"Greg\",\n        \"last_name\": \"Carmouche\",\n        \"address_line1\": \"101 Recipient Ave\",\n        \"address_line2\": \"\",\n        \"city\": \"Concord\",\n        \"state\": \"NH\",\n        \"zip_code\": \"03301-5202\",\n        \"country\": \"US\",\n        \"phone_number\": \"0000000000\"\n      },\n      \"productTitle\": \"Example Amazon product\",\n      \"productId\": \"B0B1TZ4BJ2\",\n      \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n      \"orderUrl\": \"https://www.amazon.com/gp/your-account/order-details?orderID={{orderId}}\",\n      \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n      \"sourceTracking\": \"Amazon\",\n      \"status\": \"Shipping\"\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Payment Required",
+              "code": 402,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"upsert_order\",\n  \"error\": \"Paid plan required\",\n  \"details\": {\n    \"success\": false,\n    \"error\": \"Paid plan required\"\n  }\n}"
+            }
+          ]
         },
-        "description": "Main flow: checks if the profile exists in Aquiline, creates it if missing, then upserts the order(s)."
-      }
+        {
+          "name": "Validation errors (examples)",
+          "description": "Requests that are **meant to fail** with `400 stage: \"validation\"`. They show that bad input is rejected before Aquiline is called.",
+          "item": [
+            {
+              "name": "Sync Order - missing orders (400)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "description": "`orders` is required (at least 1). Expect **400**. Aquiline is not called."
+              },
+              "response": [
+                {
+                  "name": "400 - orders is required",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{baseUrl}}/api/orders/sync",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "orders",
+                        "sync"
+                      ]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "_postman_previewlanguage": "json",
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json; charset=utf-8"
+                    }
+                  ],
+                  "body": "{\n  \"success\": false,\n  \"stage\": \"validation\",\n  \"error\": \"Validation failed\",\n  \"details\": [\n    \"\\\"orders\\\" is required\"\n  ]\n}"
+                }
+              ]
+            },
+            {
+              "name": "Sync Full - missing order (400)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders/sync-full",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "orders",
+                    "sync-full"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "description": "`order` is required. Expect **400**. Aquiline is not called."
+              },
+              "response": [
+                {
+                  "name": "400 - order is required",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{baseUrl}}/api/orders/sync-full",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "orders",
+                        "sync-full"
+                      ]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\",\n  \"label\": \"Amazon US\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"retailer\": \"amazon-us\",\n  \"storeAddress\": {\n    \"address_line1\": \"100 Example St\",\n    \"address_line2\": \"\",\n    \"city\": \"Example City\",\n    \"state\": \"CA\",\n    \"zip_code\": \"90001\",\n    \"country\": \"US\",\n    \"first_name\": \"\",\n    \"last_name\": \"\",\n    \"phone_number\": \"\"\n  },\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "_postman_previewlanguage": "json",
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json; charset=utf-8"
+                    }
+                  ],
+                  "body": "{\n  \"success\": false,\n  \"stage\": \"validation\",\n  \"error\": \"Validation failed\",\n  \"details\": [\n    \"\\\"order\\\" is required\"\n  ]\n}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "Sync Order - Validation Error (missing orders)",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"accountOrigin\": \"amazon\"\n}",
-          "options": { "raw": { "language": "json" } }
+      "name": "Tracking",
+      "description": "Individual tracking operations: assign, upload the daily HTML refresh, and look up an order. For a new order, use **Orders → Sync Full** instead.",
+      "item": [
+        {
+          "name": "Get Tracking (lookup AQUA number & status)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tracking/{{profileId}}/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tracking",
+                "{{profileId}}",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Read-only lookup of an order in Aquiline. It calls `GET /v1/profiles/{profileId}/orders/{orderId}`. **No cost.**\n\nUse it to check whether an order already has an AQUA number (`aquilineNumber`) before assigning, or to read the current status.\n\n### Path params\n- `profileId`: profile id (`{{profileId}}`)\n- `orderId`: Amazon order id (`{{orderId}}`)\n\n### Response\n`aquilineNumber` is `null` when the order hasn't been assigned yet. `order` is the full Aquiline order snapshot.\n\n**404** (`stage: \"get_tracking\"`) means the order or profile doesn't exist in Aquiline. Sync it first."
+          },
+          "response": [
+            {
+              "name": "200 - Assigned order",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/{{profileId}}/{{orderId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "{{profileId}}",
+                    "{{orderId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"aquilineNumber\": \"AQUA0000000000YQ\",\n  \"status\": \"Shipping\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId=113-5870630-5330667\",\n  \"order\": {\n    \"orderId\": \"113-5870630-5330667\",\n    \"profileId\": \"amazon-us-main\",\n    \"accountOrigin\": \"amazon\",\n    \"retailer\": \"amazon-us\",\n    \"marketplaceHost\": \"www.amazon.com\",\n    \"shipToName\": \"Greg Carmouche\",\n    \"productTitle\": \"Example Amazon product\",\n    \"productId\": \"B0B1TZ4BJ2\",\n    \"productUrl\": \"https://www.amazon.com/dp/B0B1TZ4BJ2\",\n    \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId=113-5870630-5330667\",\n    \"sourceTracking\": \"Amazon\",\n    \"status\": \"Shipping\",\n    \"aquilineNumber\": \"AQUA0000000000YQ\"\n  }\n}"
+            },
+            {
+              "name": "404 - Order not found in Aquiline",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/{{profileId}}/{{orderId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "{{profileId}}",
+                    "{{orderId}}"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"get_tracking\",\n  \"error\": \"Order not found in Aquiline\"\n}"
+            }
+          ]
         },
-        "url": {
-          "raw": "{{baseUrl}}/api/orders/sync",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "orders", "sync"]
+        {
+          "name": "Assign Tracking",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/tracking/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tracking",
+                "assign"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"retailer\": \"amazon-us\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"sourceTracking\": \"Amazon\",\n  \"shippingAddress\": {\n    \"first_name\": \"Greg\",\n    \"last_name\": \"Carmouche\",\n    \"address_line1\": \"101 Recipient Ave\",\n    \"address_line2\": \"\",\n    \"city\": \"Concord\",\n    \"state\": \"NH\",\n    \"zip_code\": \"03301-5202\",\n    \"country\": \"US\",\n    \"phone_number\": \"0000000000\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Registers the order with Aquiline tracking and returns its **AQUA number**. It calls Aquiline's `POST /v1/profiles/{profileId}/orders/{orderId}/assign` and passes the body through as-is.\n\n> ⚠️ **Counts against your Aquiline plan.** This endpoint does **not** check whether the order is already assigned. Use **Get Tracking** first, or use **Sync Full**, which skips already-assigned orders automatically.\n\nThe order must already be synced, and the profile should have a `storeAddress`.\n\n### Body\n\n| Field | Required | Notes |\n|---|---|---|\n| `profileId` | ✅ | |\n| `orderId` | ✅ | Amazon order id. |\n| `trackingUrl` | ✅ | The Amazon tracking page URL. |\n| `retailer` | | e.g. `amazon-us`. |\n| `marketplaceHost` | | e.g. `www.amazon.com`. |\n| `sourceTracking` | | `\"Amazon\"`. |\n| `amazonCustomerId` | | Optional. |\n| `shippingAddress` | | Recipient address. |\n\n### Response\n`aquiline` is the AQUA tracking number. `chargedCents` / `planRemaining` show plan usage."
+          },
+          "response": [
+            {
+              "name": "200 - Assigned",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/assign",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "assign"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"retailer\": \"amazon-us\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"sourceTracking\": \"Amazon\",\n  \"shippingAddress\": {\n    \"first_name\": \"Greg\",\n    \"last_name\": \"Carmouche\",\n    \"address_line1\": \"101 Recipient Ave\",\n    \"address_line2\": \"\",\n    \"city\": \"Concord\",\n    \"state\": \"NH\",\n    \"zip_code\": \"03301-5202\",\n    \"country\": \"US\",\n    \"phone_number\": \"0000000000\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"aquiline\": \"AQUA0000000000YQ\",\n  \"chargedCents\": 0,\n  \"planRemaining\": 287\n}"
+            },
+            {
+              "name": "402 - Paid plan required",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/assign",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "assign"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"retailer\": \"amazon-us\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"sourceTracking\": \"Amazon\",\n  \"shippingAddress\": {\n    \"first_name\": \"Greg\",\n    \"last_name\": \"Carmouche\",\n    \"address_line1\": \"101 Recipient Ave\",\n    \"address_line2\": \"\",\n    \"city\": \"Concord\",\n    \"state\": \"NH\",\n    \"zip_code\": \"03301-5202\",\n    \"country\": \"US\",\n    \"phone_number\": \"0000000000\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Payment Required",
+              "code": 402,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"assign_tracking\",\n  \"error\": \"Paid plan required\",\n  \"details\": {\n    \"success\": false,\n    \"error\": \"Paid plan required\"\n  }\n}"
+            },
+            {
+              "name": "400 - Validation: trackingUrl missing",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/assign",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "assign"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"validation\",\n  \"error\": \"Validation failed\",\n  \"details\": [\n    \"\\\"trackingUrl\\\" is required\"\n  ]\n}"
+            }
+          ]
         },
-        "description": "Expect a 400 with stage: validation — used to confirm Joi validation runs before Aquiline is ever called."
-      }
+        {
+          "name": "Upload Tracking HTML (daily refresh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/tracking/upload-html",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tracking",
+                "upload-html"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Sends a new snapshot of the Amazon **tracking** page so Aquiline can update carrier and delivery milestones. It calls Aquiline's `POST /v1/profiles/{profileId}/orders/{orderId}/tracking-html`.\n\n**When:** about **1-2 times per day** per active order, while the buyer's Amazon session is still valid. The first upload can be done by **Sync Full**. Use this endpoint for the daily refreshes after that.\n\n### Body\n\n| Field | Required | Notes |\n|---|---|---|\n| `profileId` | ✅ | |\n| `orderId` | ✅ | Amazon order id. |\n| `trackingUrl` | ✅ | The ship-track URL the HTML was taken from. |\n| `html` | ✅ | Full HTML of the **tracking** page (progress tracker) from a signed-in session. **Not** the order-details page. Max request 5 MB. |\n| `amazonCustomerId` | | Optional. |\n\n### Response: read `outcome`, not just `success`\n\n| `outcome` | Meaning |\n|---|---|\n| `accepted` | Stored and validated, **still processing** (`trackingUpdateStatus: \"processing\"`). **Not yet applied.** |\n| `applied` | The update was applied to the AQUA tracking number. |\n\nOn a hard failure Aquiline returns a `problemCode`, which you'll find in `details.problemCode` (HTTP 502). Codes: `wrong_page_type`, `amazon_session_expired`, `tracking_url_mismatch`, `needs_tracking_upload`, `update_not_applied`, `assign_validation`, `shipment_exception`, `tracking_update_unavailable`.\n\n- `amazon_session_expired`: the Amazon login is no longer valid. Sign in again and capture new HTML.\n- `wrong_page_type`: you sent the order-details page instead of the tracking page."
+          },
+          "response": [
+            {
+              "name": "200 - Accepted (still processing)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/upload-html",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "upload-html"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"outcome\": \"accepted\",\n  \"trackingUpdateStatus\": \"processing\",\n  \"message\": \"Processing updates…\"\n}"
+            },
+            {
+              "name": "200 - Applied",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/upload-html",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "upload-html"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"outcome\": \"applied\",\n  \"trackingUpdateStatus\": \"ok\",\n  \"message\": \"Tracking updated\"\n}"
+            },
+            {
+              "name": "502 - Amazon session expired",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/tracking/upload-html",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "tracking",
+                    "upload-html"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste the signed-in Amazon TRACKING page HTML here (not order-details)...</html>\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Gateway",
+              "code": 502,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"stage\": \"upload_html\",\n  \"error\": \"Amazon session expired\",\n  \"details\": {\n    \"success\": false,\n    \"problemCode\": \"amazon_session_expired\",\n    \"message\": \"Amazon session expired\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
     },
     {
-      "name": "Upload Tracking HTML (Amazon)",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"html\": \"<html>Paste authenticated Amazon tracking page HTML here...</html>\"\n}",
-          "options": { "raw": { "language": "json" } }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/tracking/upload-html",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "tracking", "upload-html"]
-        },
-        "description": "Task 2 (on demand). success:true only means the HTML was accepted, not that it was applied — check outcome/trackingUpdateStatus in the response."
-      }
+      "key": "profileId",
+      "value": "amazon-us-main",
+      "type": "string"
     },
     {
-      "name": "Assign Tracking (register with Aquiline)",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"profileId\": \"{{profileId}}\",\n  \"orderId\": \"{{orderId}}\",\n  \"trackingUrl\": \"https://www.amazon.com/gp/your-account/ship-track?orderId={{orderId}}\",\n  \"retailer\": \"amazon-us\",\n  \"marketplaceHost\": \"www.amazon.com\",\n  \"sourceTracking\": \"Amazon\",\n  \"shippingAddress\": {\n    \"first_name\": \"Greg\",\n    \"last_name\": \"Carmouche\",\n    \"address_line1\": \"101 Recipient Ave\",\n    \"address_line2\": \"\",\n    \"city\": \"Concord\",\n    \"state\": \"NH\",\n    \"zip_code\": \"03301-5202\",\n    \"country\": \"US\",\n    \"phone_number\": \"0000000000\"\n  }\n}",
-          "options": { "raw": { "language": "json" } }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/tracking/assign",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "tracking", "assign"]
-        },
-        "description": "For AliExpress/Walmart, replace with a carrier tracking number and add \"carrier\": \"FEDEX\"|\"UPS\"|\"USPS\"|\"ONTRAC\"|\"WALMART\"|\"CAINIAO\"|\"GOFO\"|\"UNIUNI\", and omit retailer."
-      }
-    },
-    {
-      "name": "Get Tracking (lookup Aquiline number)",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/tracking/{{profileId}}/{{orderId}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "tracking", "{{profileId}}", "{{orderId}}"]
-        },
-        "description": "Task 3 (on demand). Returns aquilineNumber/status/trackingUrl for the order."
-      }
+      "key": "orderId",
+      "value": "113-5870630-5330667",
+      "type": "string"
     }
   ]
 }
