@@ -4,7 +4,7 @@ const trackingRoutes = require('./tracking.routes');
 
 const router = express.Router();
 
-router.get('/healthz', (req, res) => res.status(200).json({ success: true, status: 'ok' }));
+router.get('/health', (req, res) => res.status(200).json({ success: true, status: 'ok' }));
 
 router.use('/orders', ordersRoutes);
 router.use('/tracking', trackingRoutes);

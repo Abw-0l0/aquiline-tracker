@@ -16,6 +16,9 @@ returns a clean success/failure response.
   snapshot so Aquiline can refresh carrier signals.
 - **Tracking lookup** (on demand) — fetch the Aquiline tracking number/status
   for a given order.
+- **Full sync** (`/api/orders/sync-full`) — one call per order: sync, assign
+  tracking (skipped if already assigned, so retries never double-charge), and
+  upload Amazon tracking HTML, with a per-step report.
 - **Tracking assign** — register a carrier tracking number (AliExpress/Walmart)
   or Amazon tracking URL with Aquiline.
 - Centralized request validation (Joi), structured logging (Winston), and a
@@ -40,6 +43,7 @@ npm install
 ```bash
 npm run dev     # nodemon, auto-reload
 npm start       # production
+npm test        # jest + nock, no real Aquiline calls
 ```
 
 ## Docker
@@ -63,7 +67,7 @@ docker run --env-file .env -p 3000:3000 aquiline-sync-service
 
 ## API
 
-### `GET /api/healthz`
+### `GET /api/health`
 Liveness check. `{ "success": true, "status": "ok" }`
 
 ### `POST /api/orders/sync`
@@ -107,6 +111,63 @@ Main flow: ensure the profile exists in Aquiline, then upsert the order(s).
 { "success": false, "stage": "upsert_order", "error": "..." }
 ```
 
+### `POST /api/orders/sync-full`
+One order, end to end: **ensure profile → upsert order → assign tracking →
+upload tracking HTML**. Stops at the first failed step and returns a report for
+every step.
+
+**Request**
+```jsonc
+{
+  "profileId": "amazon-us-main",
+  "accountOrigin": "amazon",            // amazon | aliexpress | walmart
+  "marketplaceHost": "www.amazon.com",
+  "storeAddress": { "address_line1": "100 Example St", "city": "Example City", "state": "CA", "zip_code": "90001", "country": "US" },
+  "order": {
+    "marketplaceOrderId": "113-5870630-5330667",
+    "trackingUrl": "https://www.amazon.com/gp/your-account/ship-track?orderId=113-5870630-5330667",
+    "sourceTracking": "Amazon",
+    "status": "Shipping"
+  },
+  "tracking": {                         // optional; overrides order fields for assign
+    "trackingUrl": "...",               // non-Amazon: carrier tracking number
+    "carrier": "FEDEX",                 // required for aliexpress/walmart when a tracking number is present
+    "retailer": "amazon-us",            // Amazon only (never sent for aliexpress/walmart)
+    "shippingAddress": { }
+  },
+  "html": "<html>...Amazon tracking page...</html>"   // optional, Amazon only
+}
+```
+
+**Steps**
+
+| Step | Runs when | Skipped with reason |
+|---|---|---|
+| `ensure_profile` | always (creates the profile if missing) | — |
+| `upsert_order` | always | — |
+| `assign_tracking` | a tracking number exists and the order has no `aquilineNumber` yet | `no_tracking`, `already_assigned` |
+| `upload_html` | Amazon, `html` given, order has an `aquilineNumber` | `not_amazon`, `no_html`, `not_assigned` |
+
+Each step reports `status`: `done` | `skipped` | `failed` | `not_run`.
+
+**Response** (`200` on success; on failure the HTTP status of the failed step: `402` / `502` / `504` / `500`)
+```jsonc
+{
+  "success": true,
+  "profileId": "amazon-us-main",
+  "orderId": "113-5870630-5330667",
+  "failedStep": null,
+  "steps": {
+    "ensure_profile":  { "status": "done", "created": false },
+    "upsert_order":    { "status": "done", "suggestAmazonEmailFetch": false },
+    "assign_tracking": { "status": "done", "aquilineNumber": "AQUA0000000000YQ", "chargedCents": 0, "planRemaining": 287 },
+    "upload_html":     { "status": "done", "outcome": "accepted", "trackingUpdateStatus": "processing", "message": "..." }
+  }
+}
+```
+A failed step looks like `{ "status": "failed", "stage": "upload_html", "error": "...", "details": { "problemCode": "amazon_session_expired" } }`,
+and later steps are `not_run`. `outcome: "accepted"` does **not** mean the HTML was applied.
+
 ### `POST /api/tracking/upload-html`  *(on demand, Amazon only)*
 ```jsonc
 {
@@ -147,6 +208,7 @@ src/
 ├── config/env.js              # env loading & validation
 ├── services/aquiline.service.js   # Aquiline HTTP API wrapper
 ├── domain/orderSync.service.js    # core check -> create -> upsert logic
+├── domain/syncFull.service.js     # sync -> assign -> upload html pipeline
 ├── controllers/                   # request handlers
 ├── routes/                        # express routers
 ├── middlewares/                   # validate.js, errorHandler.js
